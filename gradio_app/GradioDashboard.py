@@ -858,14 +858,14 @@ with gr.Blocks(title="LA Luxury Restaurant Recommender") as dashboard:
                 value=False,
             )
      
-           #==================================================
-           # Will Add Michelin-Starred Only Checkbox in the future 
-           # michelin_cb = gr.Checkbox(
-           #     label="⭐  Michelin-Starred Only",
-           #     value=False,
-           # )
-           # ==================================================
-           
+            #==================================================
+            # Will Add Michelin-Starred Only Checkbox in the future 
+            # michelin_cb = gr.Checkbox(
+            #     label="⭐  Michelin-Starred Only",
+            #     value=False,
+            # )
+            # ==================================================
+        
         search_btn = gr.Button(
             "✦  Find My Restaurant",
             elem_classes="search-btn",
@@ -920,11 +920,11 @@ with gr.Blocks(title="LA Luxury Restaurant Recommender") as dashboard:
 
 # ── Launch ──────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("\n" + "="*55)
+    print("\n" + "=" * 55)
     print("  🍽️  LA Luxury Restaurant Recommender")
     print("  Open your browser and go to:")
     print("  ➜  http://localhost:7860")
-    print("="*55 + "\n")
+    print("=" * 55 + "\n")
     dashboard.launch(
         server_name="127.0.0.1",  # Browser address: http://localhost:7860
         server_port=7860,
