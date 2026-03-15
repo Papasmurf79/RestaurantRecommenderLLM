@@ -857,15 +857,7 @@ with gr.Blocks(title="LA Luxury Restaurant Recommender") as dashboard:
                 label="🌆  Rooftop / Sky-High Views Only",
                 value=False,
             )
-     
-            #==================================================
-            # Will Add Michelin-Starred Only Checkbox in the future 
-            # michelin_cb = gr.Checkbox(
-            #     label="⭐  Michelin-Starred Only",
-            #     value=False,
-            # )
-            # ==================================================
-        
+            
         search_btn = gr.Button(
             "✦  Find My Restaurant",
             elem_classes="search-btn",
