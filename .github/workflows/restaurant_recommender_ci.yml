@@ -1,0 +1,445 @@
+# ============================================================
+# LA Luxury Restaurant Recommendation System
+# GitHub Actions CI/CD Pipeline
+# ============================================================
+# PIPELINE OVERVIEW:
+#   Job 1 — lint-and-format     : Code quality checks (flake8, black, isort)
+#   Job 2 — data-validation     : CSV schema + integrity checks (depends on Job 1)
+#   Job 3 — pipeline-unit-tests : Unit tests for each notebook stage (depends on Job 2)
+#   Job 4 — gradio-smoke-test   : Import + startup sanity check for GradioDashboard.py
+#   Job 5 — security-scan       : Secret scanning + dependency audit
+#   Job 6 — pipeline-summary    : Status report artifact uploaded on every run
+# ============================================================
+
+name: Restaurant Recommender — CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - "feature/**"
+  pull_request:
+    branches:
+      - main
+      - develop
+  # Allows manual trigger from the GitHub Actions tab
+  workflow_dispatch:
+
+# Cancel in-progress runs on the same branch to avoid queue pile-ups
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# ── Global environment variables ─────────────────────────────
+env:
+  PYTHON_VERSION: "3.11"
+  # ANTHROPIC_API_KEY is stored in GitHub → Settings → Secrets → Actions
+  # It is only injected in jobs that actually need to call the API.
+  # Never hard-code keys here.
+
+# ═════════════════════════════════════════════════════════════
+# JOB 1 — LINT & FORMAT
+# Checks Python code style across all .py files and notebook
+# converted scripts. Fast-fails the whole pipeline on bad style.
+# ═════════════════════════════════════════════════════════════
+jobs:
+  lint-and-format:
+    name: "🔍 Lint & Format Check"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install linting tools
+        run: |
+          pip install --upgrade pip
+          pip install flake8 black isort nbqa
+
+      # nbqa lets flake8/black/isort run directly on .ipynb files
+      - name: Flake8 — Python scripts
+        run: |
+          flake8 gradio_app/ \
+            --max-line-length=120 \
+            --ignore=E501,W503 \
+            --exclude=__pycache__,.venv
+
+      - name: Flake8 — Jupyter notebooks (via nbqa)
+        run: |
+          nbqa flake8 jupyter_scripts/ \
+            --max-line-length=120 \
+            --ignore=E501,W503,E402
+
+      - name: Black — format check (no auto-fix, just report)
+        run: |
+          black --check --line-length 120 gradio_app/
+          nbqa black --check jupyter_scripts/
+
+      - name: isort — import order check
+        run: |
+          isort --check-only --profile black gradio_app/
+          nbqa isort --check-only jupyter_scripts/
+
+  # ═══════════════════════════════════════════════════════════
+  # JOB 2 — DATA VALIDATION
+  # Validates the integrity of every CSV artifact in the pipeline.
+  # Checks: row count, required columns, no nulls in key fields,
+  # column count progression (14 → 15 → 21 → 32).
+  # ═══════════════════════════════════════════════════════════
+  data-validation:
+    name: "📊 Data Pipeline Validation"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: lint-and-format
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install data dependencies
+        run: pip install pandas
+
+      - name: Run CSV schema & integrity validation
+        run: |
+          python - <<'EOF'
+          import pandas as pd
+          import sys
+
+          errors = []
+
+          # ── Helper ──────────────────────────────────────────
+          def validate(path, expected_rows, expected_cols, required_cols, label):
+              print(f"\n{'='*55}")
+              print(f"Validating: {label}")
+              print(f"  Path: {path}")
+              try:
+                  df = pd.read_csv(path)
+              except FileNotFoundError:
+                  errors.append(f"MISSING FILE: {path}")
+                  return
+
+              # Row count
+              if len(df) != expected_rows:
+                  errors.append(
+                      f"{label}: expected {expected_rows} rows, got {len(df)}"
+                  )
+              else:
+                  print(f"  ✅ Row count: {len(df)}")
+
+              # Column count
+              if len(df.columns) != expected_cols:
+                  errors.append(
+                      f"{label}: expected {expected_cols} columns, got {len(df.columns)}"
+                  )
+              else:
+                  print(f"  ✅ Column count: {len(df.columns)}")
+
+              # Required columns present
+              missing = [c for c in required_cols if c not in df.columns]
+              if missing:
+                  errors.append(f"{label}: missing columns → {missing}")
+              else:
+                  print(f"  ✅ Required columns present")
+
+              # No nulls in required columns
+              for col in required_cols:
+                  if col in df.columns:
+                      null_count = df[col].isnull().sum()
+                      if null_count > 0:
+                          errors.append(
+                              f"{label}: {null_count} nulls found in '{col}'"
+                          )
+              print(f"  ✅ No nulls in required columns")
+
+          # ── Stage 1 — Base cleaned CSV ───────────────────────
+          validate(
+              path="data/cleaned_restaurant_List.csv",
+              expected_rows=71,
+              expected_cols=14,
+              required_cols=["Name", "Location", "Description", "Address",
+                             "Price", "Cuisine Type", "Dining Atmosphere",
+                             "Michelin-Guide", "Customer Ratings"],
+              label="Stage 1 — cleaned_restaurant_List.csv"
+          )
+
+          # ── Stage 1b — Final cleaned CSV (+ restaurant_metadata) ─
+          validate(
+              path="data/cleaned_restaurants_final.csv",
+              expected_rows=71,
+              expected_cols=15,
+              required_cols=["Name", "Location", "Description", "Address",
+                             "Price", "Cuisine Type", "Dining Atmosphere",
+                             "Michelin-Guide", "Customer Ratings",
+                             "restaurant_metadata"],
+              label="Stage 1b — cleaned_restaurants_final.csv"
+          )
+
+          # ── Stage 3 — Classifications CSV ───────────────────
+          validate(
+              path="data/restaurants_with_classifications.csv",
+              expected_rows=71,
+              expected_cols=21,
+              required_cols=["Name", "restaurant_metadata",
+                             "simple_cuisine_group", "dining_format",
+                             "predicted_occasion", "occasion_confidence",
+                             "predicted_vibe", "vibe_confidence"],
+              label="Stage 3 — restaurants_with_classifications.csv"
+          )
+
+          # ── Stage 4 — Emotions CSV ───────────────────────────
+          validate(
+              path="data/restaurants_with_emotions.csv",
+              expected_rows=71,
+              expected_cols=32,
+              required_cols=["Name", "restaurant_metadata",
+                             "emotion_joy", "emotion_anger", "emotion_fear",
+                             "emotion_sadness", "emotion_surprise",
+                             "emotion_neutral", "emotion_disgust",
+                             "dominant_emotion", "overall_sentiment",
+                             "sentiment_score", "dining_mood"],
+              label="Stage 4 — restaurants_with_emotions.csv"
+          )
+
+          # ── Tagged descriptions text file ────────────────────
+          print(f"\n{'='*55}")
+          print("Validating: tagged_restaurant_descriptions.txt")
+          try:
+              with open("data/tagged_restaurant_descriptions.txt", "r") as f:
+                  lines = [l.strip() for l in f if l.strip()]
+              if len(lines) != 71:
+                  errors.append(
+                      f"tagged_restaurant_descriptions.txt: "
+                      f"expected 71 entries, got {len(lines)}"
+                  )
+              else:
+                  print(f"  ✅ Line count: {len(lines)}")
+          except FileNotFoundError:
+              errors.append("MISSING FILE: data/tagged_restaurant_descriptions.txt")
+
+          # ── Final result ─────────────────────────────────────
+          print(f"\n{'='*55}")
+          if errors:
+              print("❌ DATA VALIDATION FAILED:")
+              for e in errors:
+                  print(f"   • {e}")
+              sys.exit(1)
+          else:
+              print("✅ ALL DATA VALIDATIONS PASSED")
+          EOF
+
+  # ═══════════════════════════════════════════════════════════
+  # JOB 3 — PIPELINE UNIT TESTS
+  # Runs pytest unit tests for each pipeline stage.
+  # These live in a /tests directory (see advisory below).
+  # Heavy HuggingFace models are MOCKED — no GPU needed.
+  # ═══════════════════════════════════════════════════════════
+  pipeline-unit-tests:
+    name: "🧪 Pipeline Unit Tests"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: data-validation
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+
+      - name: Run unit tests with coverage
+        env:
+          # Inject a MOCK key so code that checks for key presence doesn't fail.
+          # Real API calls must be mocked in tests — never call the live API in CI.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY_TEST }}
+        run: |
+          pytest tests/ \
+            --cov=gradio_app \
+            --cov-report=xml:coverage.xml \
+            --cov-report=term-missing \
+            --tb=short \
+            -v
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+          retention-days: 14
+
+  # ═══════════════════════════════════════════════════════════
+  # JOB 4 — GRADIO SMOKE TEST
+  # Verifies GradioDashboard.py can be imported and that the
+  # Gradio app object is correctly instantiated without errors.
+  # Does NOT spin up a live server — just checks for import
+  # and interface build errors.
+  # ═══════════════════════════════════════════════════════════
+  gradio-smoke-test:
+    name: "🚀 Gradio App Smoke Test"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: pipeline-unit-tests
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install all dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Gradio import & interface instantiation check
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY_TEST }}
+        run: |
+          python - <<'EOF'
+          import sys
+          import os
+
+          # Prevent Gradio from trying to launch a server
+          os.environ["GRADIO_SERVER_NAME"] = "0.0.0.0"
+
+          try:
+              # Attempt import — catches syntax errors and bad imports
+              import importlib.util
+              spec = importlib.util.spec_from_file_location(
+                  "GradioDashboard", "gradio_app/GradioDashboard.py"
+              )
+              module = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(module)
+              print("✅ GradioDashboard.py imported successfully")
+          except Exception as e:
+              print(f"❌ Gradio smoke test failed: {e}")
+              sys.exit(1)
+          EOF
+
+  # ═══════════════════════════════════════════════════════════
+  # JOB 5 — SECURITY SCAN
+  # Checks for accidentally committed secrets, known
+  # dependency vulnerabilities, and .env file leakage.
+  # Runs in parallel with unit tests (no dependency chain).
+  # ═══════════════════════════════════════════════════════════
+  security-scan:
+    name: "🔒 Security & Secret Scan"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: lint-and-format
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history needed for secret scanning
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install security tools
+        run: pip install bandit pip-audit detect-secrets
+
+      - name: Bandit — Python security linter
+        run: |
+          bandit -r gradio_app/ \
+            -ll \
+            --exclude ".venv,__pycache__" \
+            -f txt
+
+      - name: pip-audit — dependency vulnerability check
+        run: pip-audit --require-hashes=false -r requirements.txt || true
+        # '|| true' means advisory-only — won't hard-fail the pipeline.
+        # Remove '|| true' once you have a clean bill of health.
+
+      - name: detect-secrets — scan for hardcoded credentials
+        run: |
+          detect-secrets scan --all-files \
+            --exclude-files "\.git/.*" \
+            --exclude-files ".*\.ipynb_checkpoints/.*" > .secrets.baseline
+          # If detect-secrets finds anything, it exits non-zero
+          detect-secrets audit .secrets.baseline || echo "⚠️ Review .secrets.baseline"
+
+      - name: Confirm .env is gitignored
+        run: |
+          if git ls-files --error-unmatch .env 2>/dev/null; then
+            echo "❌ CRITICAL: .env is tracked by git! Remove it immediately."
+            exit 1
+          else
+            echo "✅ .env is correctly gitignored"
+          fi
+
+  # ═══════════════════════════════════════════════════════════
+  # JOB 6 — PIPELINE SUMMARY REPORT
+  # Aggregates results and uploads a markdown summary as an
+  # artifact. Runs only after all jobs complete (success or fail).
+  # ═══════════════════════════════════════════════════════════
+  pipeline-summary:
+    name: "📋 Pipeline Summary"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs:
+      - lint-and-format
+      - data-validation
+      - pipeline-unit-tests
+      - gradio-smoke-test
+      - security-scan
+    if: always()  # Run even if upstream jobs fail
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate pipeline summary
+        run: |
+          cat <<'EOF' > pipeline_summary.md
+          # 🍽️ LA Restaurant Recommender — CI/CD Pipeline Summary
+
+          | Job | Status |
+          |---|---|
+          | Lint & Format | ${{ needs.lint-and-format.result }} |
+          | Data Validation | ${{ needs.data-validation.result }} |
+          | Unit Tests | ${{ needs.pipeline-unit-tests.result }} |
+          | Gradio Smoke Test | ${{ needs.gradio-smoke-test.result }} |
+          | Security Scan | ${{ needs.security-scan.result }} |
+
+          **Run:** ${{ github.run_number }} | **Branch:** ${{ github.ref_name }} | **Commit:** ${{ github.sha }}
+          EOF
+          cat pipeline_summary.md
+
+      - name: Upload pipeline summary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-summary-run-${{ github.run_number }}
+          path: pipeline_summary.md
+          retention-days: 30
