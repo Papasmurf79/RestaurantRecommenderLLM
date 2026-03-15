@@ -5,11 +5,9 @@
 # ============================================================
 
 import os
-import re
 import warnings
 import logging
 import pandas as pd
-import numpy as np
 import gradio as gr
 from dotenv import load_dotenv
 from langchain_community.document_loaders import TextLoader
