@@ -1,7 +1,7 @@
 # ============================================================
 #  LA Luxury Restaurant Recommender — Gradio Dashboard
 #  Phase 5: User-Facing Interface
-#  Uses: restaurants_with_emotions.csv + ChromaDB vector store
+#  Uses: restaurants_with_atmosphere.csv + ChromaDB vector store
 # ============================================================
 
 import os
@@ -25,37 +25,82 @@ logging.getLogger("transformers.modeling_utils").setLevel(logging.ERROR)
 # ── Environment & Data ─────────────────────────────────────
 load_dotenv()
 
-restaurants = pd.read_csv("../data/restaurants_with_emotions.csv")
+restaurants = pd.read_csv("../data/restaurants_with_atmosphere.csv")
+
+# Some newly-added restaurants (94-row dataset) predate the cuisine
+# classification pass and have a null simple_cuisine_group. Fall back
+# to the raw Cuisine Type column so the Cuisine filter never drops them.
+restaurants["simple_cuisine_group"] = restaurants["simple_cuisine_group"].fillna(
+    restaurants["Cuisine Type"]
+)
+
+TOTAL_RESTAURANTS = len(restaurants)
 
 # ── Load or Rebuild ChromaDB Vector Store ──────────────────
-CHROMA_DIR   = "../chroma_restaurants"
-TXT_PATH     = "../data/tagged_restaurant_descriptions.txt"
-EMBED_MODEL  = "sentence-transformers/all-MiniLM-L6-v2"
+CHROMA_DIR  = "../chroma_restaurants"
+TXT_PATH    = "../data/tagged_restaurant_descriptions.txt"
+EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
 
-if os.path.exists(CHROMA_DIR) and os.listdir(CHROMA_DIR):
-    # Load persisted database from Notebook 2
-    db_restaurants = Chroma(
-        persist_directory=CHROMA_DIR,
-        embedding_function=embeddings,
-        collection_name="la_restaurants"
-    )
-else:
-    # Build from tagged descriptions if chroma dir is missing
+
+def _build_chroma_from_txt() -> Chroma:
+    """
+    Builds the ChromaDB collection from tagged_restaurant_descriptions.txt,
+    matching the original FreeCodeCamp tutorial pattern. This file must be
+    kept in sync (one line per restaurant) any time the restaurant CSV
+    grows or shrinks — see the sync-count check below.
+    """
     raw_documents = TextLoader(TXT_PATH, encoding="utf-8").load()
-    text_splitter = CharacterTextSplitter(
-        separator="\n",
-        chunk_size=1,
-        chunk_overlap=0
-    )
+    text_splitter = CharacterTextSplitter(separator="\n", chunk_size=1, chunk_overlap=0)
     documents = text_splitter.split_documents(raw_documents)
-    db_restaurants = Chroma.from_documents(
+    return Chroma.from_documents(
         documents,
         embeddings,
         persist_directory=CHROMA_DIR,
-        collection_name="la_restaurants"
+        collection_name="la_restaurants",
     )
+
+
+# Sync-count check: tagged_restaurant_descriptions.txt must have exactly
+# one line per restaurant in the CSV. Warn loudly rather than fail silently
+# if the two ever drift apart — a quiet mismatch here means semantic search
+# silently omits or duplicates restaurants.
+with open(TXT_PATH, encoding="utf-8") as _f:
+    _txt_line_count = len([line for line in _f if line.strip()])
+
+if _txt_line_count != TOTAL_RESTAURANTS:
+    print(
+        f"⚠️  WARNING: {TXT_PATH} has {_txt_line_count} entries but "
+        f"restaurants_with_atmosphere.csv has {TOTAL_RESTAURANTS} restaurants. "
+        f"Update tagged_restaurant_descriptions.txt so the two stay in sync."
+    )
+
+_needs_rebuild = True
+if os.path.exists(CHROMA_DIR) and os.listdir(CHROMA_DIR):
+    # Load persisted database and confirm it actually matches the current
+    # .txt line count before trusting it — a stale persisted Chroma dir
+    # from a prior restaurant count would otherwise load silently.
+    db_restaurants = Chroma(
+        persist_directory=CHROMA_DIR,
+        embedding_function=embeddings,
+        collection_name="la_restaurants",
+    )
+    try:
+        existing_count = db_restaurants._collection.count()
+    except Exception:
+        existing_count = 0
+
+    if existing_count == _txt_line_count:
+        _needs_rebuild = False
+    else:
+        print(
+            f"⚠️  ChromaDB has {existing_count} documents but "
+            f"{TXT_PATH} has {_txt_line_count} entries — rebuilding vector store."
+        )
+
+if _needs_rebuild:
+    db_restaurants = _build_chroma_from_txt()
 
 
 # ── Helper: Extract Restaurant Name from Metadata ──────────
@@ -78,21 +123,26 @@ def retrieve_semantic_recommendations(
     michelin:           str  = "All",
     occasion:           str  = "All",
     vibe:               str  = "All",
-    emotion_sort:       str  = "None",
+    atmosphere:         str  = "All",
     rooftop_only:       bool = False,
-    initial_top_k:      int  = 71,
+    initial_top_k:      int  = None,
     final_top_k:        int  = 12,
 ) -> pd.DataFrame:
     """
     Semantic + filter restaurant retrieval pipeline.
 
-    1. Query ChromaDB for semantic matches (pulls all 71 as candidate pool
-       so downstream filters always have enough results to work with).
+    1. Query ChromaDB for semantic matches (pulls the full restaurant
+       count as candidate pool so downstream filters always have
+       enough results to work with).
     2. Map doc results back to the full DataFrame by restaurant name.
     3. Apply user-selected post-retrieval filters.
-    4. Optionally re-sort by a specific emotion score.
+    4. Optionally re-sort by atmosphere confidence if an atmosphere
+       filter is active.
     5. Return up to final_top_k results.
     """
+    if initial_top_k is None:
+        initial_top_k = TOTAL_RESTAURANTS
+
     # Step 1: Semantic search
     raw_docs = db_restaurants.similarity_search(query, k=initial_top_k)
 
@@ -129,21 +179,18 @@ def retrieve_semantic_recommendations(
         df = df[df["predicted_occasion"] == occasion]
     if vibe != "All":
         df = df[df["predicted_vibe"].str.contains(vibe, case=False, na=False)]
+    if atmosphere != "All":
+        df = df[
+            (df["predicted_atmosphere"] == atmosphere) |
+            (df["secondary_atmosphere"] == atmosphere)
+        ]
     if rooftop_only:
         df = df[df["Sky-High Rooftop"] == "Yes"]
 
-    # Step 4: Re-sort by emotion score if requested
-    emotion_col_map = {
-        "Joy / Celebratory":      "emotion_joy",
-        "Surprise / Excitement":  "emotion_surprise",
-        "Passionate / Intense":   "emotion_anger",
-        "Suspense / Anticipation":"emotion_fear",
-        "Soulful / Reflective":   "emotion_sadness",
-    }
-    if emotion_sort in emotion_col_map:
-        sort_col = emotion_col_map[emotion_sort]
-        if sort_col in df.columns:
-            df = df.sort_values(by=sort_col, ascending=False)
+    # Step 4: When an atmosphere filter is active, surface the
+    # restaurants most confidently matching that atmosphere first.
+    if atmosphere != "All" and "atmosphere_confidence" in df.columns:
+        df = df.sort_values(by="atmosphere_confidence", ascending=False)
 
     return df.head(final_top_k).reset_index(drop=True)
 
@@ -158,12 +205,20 @@ MICHELIN_BADGE = {
     "No":              ("",       ""),
 }
 
-MOOD_ICON = {
-    "Dramatic & Exciting":  "🎭",
-    "Elegant & Refined":    "🥂",
-    "Intimate & Personal":  "🕯️",
-    "Lively & Energetic":   "🎶",
-    "Warm & Inviting":      "🌿",
+ATMOSPHERE_ICON = {
+    "Romantic":                   "🕯️",
+    "Energetic / Lively":         "🎶",
+    "Casual":                     "👕",
+    "Fine Casual":                "🥂",
+    "Fine Dining / Formal":       "🍷",
+    "Cozy / Intimate":            "🛋️",
+    "Trendy / Hip":               "✨",
+    "Industrial / Urban":         "🏙️",
+    "Minimalist / Modern":        "⬜",
+    "Traditional / Classic":      "🏛️",
+    "Theatrical / Entertainment": "🎭",
+    "Beachy / Tropical":          "🌴",
+    "Upscale Casual":             "👔",
 }
 
 PRICE_LABEL = {
@@ -203,11 +258,12 @@ def render_restaurant_card(row: pd.Series) -> str:
     rooftop     = row["Sky-High Rooftop"] == "Yes"
     occasion    = row["predicted_occasion"]
     vibe        = row["predicted_vibe"]
-    mood        = row["dining_mood"]
+    primary_atm = row["predicted_atmosphere"]
+    secondary_atm = row["secondary_atmosphere"]
     fmt         = row["dining_format"]
 
     badge_text, badge_class = MICHELIN_BADGE.get(michelin, ("", ""))
-    mood_icon   = MOOD_ICON.get(mood, "🍽️")
+    atm_icon    = ATMOSPHERE_ICON.get(primary_atm, "🍽️")
     price_label = PRICE_LABEL.get(price, price)
     stars_html  = rating_stars(rating)
 
@@ -251,11 +307,15 @@ def render_restaurant_card(row: pd.Series) -> str:
     <div class="card-tags">
         <span class="tag tag-occasion">🎯 {occasion}</span>
         <span class="tag tag-vibe">✨ {vibe}</span>
-        <span class="tag tag-mood">{mood_icon} {mood}</span>
+        <span class="tag tag-atmosphere">{atm_icon} {primary_atm}</span>
         <span class="tag tag-format">🍽️ {fmt}</span>
     </div>
 
     <div class="card-details">
+        <div class="detail-item">
+            <span class="detail-icon">🎨</span>
+            <span>Also feels: {secondary_atm}</span>
+        </div>
         <div class="detail-item">
             <span class="detail-icon">🕐</span>
             <span>{hours}</span>
@@ -306,7 +366,7 @@ def search_restaurants(
     michelin:     str,
     occasion:     str,
     vibe:         str,
-    emotion:      str,
+    atmosphere:   str,
     rooftop:      bool,
 ) -> str:
     if not query or not query.strip():
@@ -320,7 +380,7 @@ def search_restaurants(
         michelin      = michelin,
         occasion      = occasion,
         vibe          = vibe,
-        emotion_sort  = emotion,
+        atmosphere    = atmosphere,
         rooftop_only  = rooftop,
         final_top_k   = 12,
     )
@@ -328,14 +388,13 @@ def search_restaurants(
 
 
 # ── Dropdown Options ────────────────────────────────────────
-cuisine_choices  = ["All"] + sorted(restaurants["simple_cuisine_group"].unique())
-location_choices = ["All"] + sorted(restaurants["Location"].unique())
-price_choices    = ["All", "$", "$$", "$$$", "$$$$", "$$$$$"]
-michelin_choices = ["All", "3-Star", "2-Star", "1-Star", "Bib-Gourmand", "Michelin-Selected"]
-occasion_choices = ["All"] + sorted(restaurants["predicted_occasion"].unique())
-vibe_choices     = ["All"] + sorted(restaurants["predicted_vibe"].unique())
-emotion_choices  = ["None", "Joy / Celebratory", "Surprise / Excitement",
-                    "Passionate / Intense", "Suspense / Anticipation", "Soulful / Reflective"]
+cuisine_choices    = ["All"] + sorted(restaurants["simple_cuisine_group"].dropna().unique())
+location_choices   = ["All"] + sorted(restaurants["Location"].unique())
+price_choices      = ["All", "$", "$$", "$$$", "$$$$", "$$$$$"]
+michelin_choices   = ["All", "3-Star", "2-Star", "1-Star", "Bib-Gourmand", "Michelin-Selected"]
+occasion_choices   = ["All"] + sorted(restaurants["predicted_occasion"].unique())
+vibe_choices       = ["All"] + sorted(restaurants["predicted_vibe"].unique())
+atmosphere_choices = ["All"] + sorted(restaurants["predicted_atmosphere"].unique())
 
 
 # ── Custom CSS ──────────────────────────────────────────────
@@ -711,7 +770,7 @@ footer { display: none !important; }
 }
 .tag-occasion { background: rgba(201,148,58,0.12); color: var(--gold-light); border: 1px solid rgba(201,148,58,0.2); }
 .tag-vibe     { background: rgba(193,122,111,0.12); color: #D4907F; border: 1px solid rgba(193,122,111,0.2); }
-.tag-mood     { background: rgba(122,158,126,0.12); color: var(--sage); border: 1px solid rgba(122,158,126,0.2); }
+.tag-atmosphere { background: rgba(122,158,126,0.12); color: var(--sage); border: 1px solid rgba(122,158,126,0.2); }
 .tag-format   { background: rgba(242,237,228,0.06); color: var(--cream-muted); border: 1px solid var(--border); }
 
 /* Detail Items */
@@ -787,13 +846,13 @@ GRADIO_THEME = gr.themes.Base(
 with gr.Blocks(title="LA Luxury Restaurant Recommender") as dashboard:
 
     # ── Header ───────────────────────────────────────────
-    gr.HTML("""
+    gr.HTML(f"""
     <div class="site-header">
         <div class="site-header-eyebrow">Los Angeles · Curated Dining Guide</div>
         <h1>Discover <em>Extraordinary</em><br>Dining in LA</h1>
         <p class="site-header-sub">
-            Semantic search across 71 curated upscale and Michelin-recognized
-            restaurants — filtered by cuisine, vibe, price, and emotion.
+            Semantic search across {TOTAL_RESTAURANTS} curated upscale and Michelin-recognized
+            restaurants — filtered by cuisine, vibe, price, and atmosphere.
         </p>
     </div>
     """)
@@ -834,7 +893,7 @@ with gr.Blocks(title="LA Luxury Restaurant Recommender") as dashboard:
                 label="Michelin Rating",
             )
 
-        # Row 2: Occasion, Vibe, Emotion Sort, Rooftop
+        # Row 2: Occasion, Vibe, Atmosphere, Rooftop
         with gr.Row():
             occasion_dd = gr.Dropdown(
                 choices=occasion_choices,
@@ -846,10 +905,10 @@ with gr.Blocks(title="LA Luxury Restaurant Recommender") as dashboard:
                 value="All",
                 label="Vibe",
             )
-            emotion_dd = gr.Dropdown(
-                choices=emotion_choices,
-                value="None",
-                label="Sort by Emotion",
+            atmosphere_dd = gr.Dropdown(
+                choices=atmosphere_choices,
+                value="All",
+                label="Atmosphere",
             )
             rooftop_cb = gr.Checkbox(
                 label="🌆  Rooftop / Sky-High Views Only",
@@ -884,7 +943,7 @@ with gr.Blocks(title="LA Luxury Restaurant Recommender") as dashboard:
             michelin_dd,
             occasion_dd,
             vibe_dd,
-            emotion_dd,
+            atmosphere_dd,
             rooftop_cb,
         ],
         outputs=results_output,
@@ -901,7 +960,7 @@ with gr.Blocks(title="LA Luxury Restaurant Recommender") as dashboard:
             michelin_dd,
             occasion_dd,
             vibe_dd,
-            emotion_dd,
+            atmosphere_dd,
             rooftop_cb,
         ],
         outputs=results_output,

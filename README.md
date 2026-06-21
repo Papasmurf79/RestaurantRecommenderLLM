@@ -12,7 +12,7 @@
 
 ## 📌 Project Overview
 
-This project is a **production-style, multi-stage AI pipeline** that transforms a curated dataset of 71 upscale and Michelin-recognized Los Angeles restaurants into an intelligent, conversational recommendation engine. Users can query the system in plain English — *"romantic rooftop Italian restaurant in Beverly Hills"* — and receive semantically ranked, filter-refined recommendations powered by embeddings, zero-shot classification, emotion analysis, and a large language model.
+This project is a **production-style, multi-stage AI pipeline** that transforms a curated dataset of 94 upscale and Michelin-recognized Los Angeles restaurants into an intelligent, conversational recommendation engine. Users can query the system in plain English — *"romantic rooftop Italian restaurant in Beverly Hills"* — and receive semantically ranked, filter-refined recommendations powered by embeddings, zero-shot classification, emotion analysis, and a large language model.
 
 Built as an adaptation of the [FreeCodeCamp Semantic Book Recommender tutorial](https://www.freecodecamp.org/news/build-a-semantic-book-recommender-using-an-llm-and-python/), this project translates that framework into the restaurant domain, extending it with multi-notebook architecture, metadata enrichment, multi-label NLP classification, and an interactive Gradio front end.
 
@@ -43,7 +43,7 @@ This is not a tutorial copy — it is a **domain-adapted, multi-notebook AI engi
 | **Data Engineering** | CSV ingestion, multi-column inspection, whitespace normalization, address correction, metadata column generation |
 | **Semantic Search** | Sentence transformer embeddings + ChromaDB vector store with persisted storage |
 | **NLP Classification** | Zero-shot classification via `facebook/bart-large-mnli` for cuisine, occasion, and vibe |
-| **Emotion & Sentiment Analysis** | Multi-label emotion scoring via `distilbert-base-uncased-emotion` + dominant emotion extraction |
+| **Dining Atmosphere & Sentiment Analysis** | Natural Language Inference classification scoring via `deberta-v3-base-zeroshot-v2.0` + Zero-Shot classification extraction |
 | **LLM Integration** | Claude Sonnet via Anthropic API for natural language recommendation synthesis |
 | **Pipeline Architecture** | 4-notebook modular design with shared CSV artifacts between stages |
 | **UI Development** | Gradio dashboard with real-time query, multi-filter support, and restaurant cards |
@@ -57,17 +57,17 @@ This is not a tutorial copy — it is a **domain-adapted, multi-notebook AI engi
 RestaurantRecommenderLLM/
 │
 ├── data/
-│   ├── cleaned_restaurant_List.csv              # Original cleaned dataset (71 restaurants)
+│   ├── cleaned_restaurant_List.csv              # Original cleaned dataset (94 restaurants)
 │   ├── cleaned_restaurants_final.csv            # + restaurant_metadata column
 │   ├── restaurants_with_classifications.csv     # + cuisine group, dining format, occasion, vibe
-│   ├── restaurants_with_emotions.csv            # + 7 emotion scores, sentiment, dining mood
+│   ├── restaurants_with_atmosphere.csv            # + 14 atmosphere types, sentiment, dining mood
 │   └── tagged_restaurant_descriptions.txt       # Formatted text for ChromaDB ingestion
 │
 ├── jupyter_scripts/
 │   ├── 1_Restaurant_Data_Cleanup.ipynb          # Stage 1: Data inspection & enrichment
 │   ├── 2_Restaurant_Vector_Search.ipynb         # Stage 2: Embeddings & semantic retrieval
 │   ├── 3_Restaurant_Text_Classification.ipynb   # Stage 3: Zero-shot NLP classification
-│   └── 4_Restaurant_Sentiment_Analysis.ipynb    # Stage 4: Emotion & sentiment scoring
+│   └── 4_Restaurant_Atmosphere_Classification.ipynb    # Stage 4: Dining Atmosphere & sentiment scoring
 │
 ├── gradio_app/
 │   └── GradioDashboard.py                       # Interactive web UI
@@ -105,8 +105,8 @@ Raw CSV
    → restaurants_with_classifications.csv  (+cuisine_group, dining_format, occasion, vibe)
    │
    ▼
-[Notebook 4] Emotion & Sentiment Analysis
-   → restaurants_with_emotions.csv  (+7 emotion scores, dominant_emotion, dining_mood)
+[Notebook 4] Dining Atmosphere & Sentiment Analysis
+   → restaurants_with_atmosphere.csv  (+14 atmosphere scores, dominant_emotion, dining_mood)
    │
    ▼
 [Gradio Dashboard] — Combines all stages for live querying
@@ -117,7 +117,7 @@ Raw CSV
 ## 📓 Notebook Breakdown
 
 ### Notebook 1 — Data Cleanup & Metadata Enrichment
-- Inspected all 14 columns across 71 restaurant records
+- Inspected all 14 columns across 94 restaurant records
 - Resolved trailing whitespace in `Address` and `Description` columns
 - Corrected a missing comma in Mastro's Ocean Club address
 - Fixed an incorrect zip code for Morihiro (Echo Park location)
@@ -141,11 +141,10 @@ Raw CSV
 - Output: `restaurants_with_classifications.csv` (21 columns)
 
 ### Notebook 4 — Emotion & Sentiment Analysis
-- Applied `bhadresh-savani/distilbert-base-uncased-emotion` to `restaurant_metadata` field
-- Extracted 7 per-restaurant emotion probability scores: `anger`, `disgust`, `fear`, `joy`, `neutral`, `sadness`, `surprise`
-- Derived `dominant_emotion` and `dining_mood` labels from score distributions
-- Added `overall_sentiment` (Positive / Neutral / Negative) using a secondary sentiment classifier
-- Output: `restaurants_with_emotions.csv` (32 columns) — the final enriched dataset powering the Gradio dashboard
+- Applied `MoritzLaurer/deberta-v3-base-zeroshot-v2.0` to `restaurant_metadata` field
+- Extracted 13 per-restaurant atmosphere probability labels: `Romantic`, `Energetic/Lively`, `Casual`, `Fine Casual`, `Fine Dining/Formal`, `Cozy/Intimate`, `Trendy/Hip`, `Industrial/Urban`, `Minimalist/Modern`, `Traditional/Classic`, `Theatrical/Entertainment`, `Beachy/Tropical`, `Upscale Casual`
+- Derived `predicted_atmosphere`, `atmosphere_confidence`, and `secondary_atmosphere` columns from atmosphere labels
+- Output: `restaurants_with_atmosphere.csv` (32 columns) — the final enriched dataset powering the Gradio dashboard
 
 ---
 
@@ -161,11 +160,10 @@ Raw CSV
 |---|---|
 | `facebook/bart-large-mnli` | Zero-shot multi-label classification (cuisine, format, occasion, vibe) |
 
-### Sentiment & Emotion
+### Dining Atmosphere Sentiment
 | Model | Purpose |
 |---|---|
-| `bhadresh-savani/distilbert-base-uncased-emotion` | 7-class emotion scoring from text |
-| Secondary sentiment classifier | Positive / Neutral / Negative overall sentiment |
+| `MoritzLaurer/deberta-v3-base-zeroshot-v2.0` | 13 custom zero-shot classification labeling from text |
 
 ### LLM
 | Model | Purpose |
@@ -185,7 +183,7 @@ Raw CSV
 
 ## 🗄️ Dataset
 
-- **71 curated restaurants** across Los Angeles County
+- **94 curated restaurants** across Los Angeles County
 - Covers Michelin 3-Star, 2-Star, 1-Star, Bib Gourmand, Michelin Selected, and high-end non-Michelin establishments
 - Data sourced from: Michelin Guide, OpenTable, Time Out LA, restaurant websites
 - Each restaurant record contains 14 base fields, enriched to **32 columns** by end of pipeline
@@ -197,12 +195,11 @@ Raw CSV
 | `restaurant_metadata` | Enriched descriptive text for NLP tasks |
 | `simple_cuisine_group` | Classified cuisine category |
 | `dining_format` | Tasting Menu, Full Service, Counter, etc. |
-| `predicted_occasion` | Best For — Special Occasion, Date Night, etc. |
-| `predicted_vibe` | Refined & Elegant, Hip & Trendy, etc. |
-| `emotion_joy` / `emotion_neutral` / ... | Per-restaurant emotion probability scores |
-| `dominant_emotion` | Highest-scoring emotion label |
+| `predicted_atmosphere` | Best For — Special Occasion, Date Night, etc. |
+| `secondary_atmosphere` | Refined & Elegant, Hip & Trendy, etc. |
+| `atmosphere_confidence` | Per-restaurant atmosphere probability scores |
+| `dominant_vibe` | Highest-scoring emotion label |
 | `dining_mood` | Human-readable mood derived from emotion profile |
-| `overall_sentiment` | Positive / Neutral / Negative |
 
 ---
 
@@ -245,7 +242,7 @@ Run notebooks in order from the `jupyter_scripts/` directory:
 1_Restaurant_Data_Cleanup.ipynb
 2_Restaurant_Vector_Search.ipynb
 3_Restaurant_Text_Classification.ipynb
-4_Restaurant_Sentiment_Analysis.ipynb
+4_Restaurant_Atmosphere_Classification.ipynb
 ```
 
 ### Launching the Dashboard
