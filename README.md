@@ -12,7 +12,7 @@
 
 ## 📌 Project Overview
 
-This project is a **production-style, multi-stage AI pipeline** that transforms a curated dataset of 94 upscale and Michelin-recognized Los Angeles restaurants into an intelligent, conversational recommendation engine. Users can query the system in plain English — *"romantic rooftop Italian restaurant in Beverly Hills"* — and receive semantically ranked, filter-refined recommendations powered by embeddings, zero-shot classification, emotion analysis, and a large language model.
+This project is a **production-style, multi-stage AI pipeline** that transforms a curated dataset of 100 upscale and Michelin-recognized Los Angeles restaurants into an intelligent, conversational recommendation engine. Users can query the system in plain English — *"romantic rooftop Italian restaurant in Beverly Hills"* — and receive semantically ranked, filter-refined recommendations powered by embeddings, zero-shot classification, emotion analysis, and a large language model.
 
 Built as an adaptation of the [FreeCodeCamp Semantic Book Recommender tutorial](https://www.freecodecamp.org/news/build-a-semantic-book-recommender-using-an-llm-and-python/), this project translates that framework into the restaurant domain, extending it with multi-notebook architecture, metadata enrichment, multi-label NLP classification, and an interactive Gradio front end.
 
@@ -57,7 +57,7 @@ This is not a tutorial copy — it is a **domain-adapted, multi-notebook AI engi
 RestaurantRecommenderLLM/
 │
 ├── data/
-│   ├── cleaned_restaurant_List.csv              # Original cleaned dataset (94 restaurants)
+│   ├── cleaned_restaurant_List.csv              # Original cleaned dataset (100 restaurants)
 │   ├── cleaned_restaurants_final.csv            # + restaurant_metadata column
 │   ├── restaurants_with_classifications.csv     # + cuisine group, dining format, occasion, vibe
 │   ├── restaurants_with_atmosphere.csv            # + 14 atmosphere types, sentiment, dining mood
@@ -106,7 +106,7 @@ Raw CSV
    │
    ▼
 [Notebook 4] Dining Atmosphere & Sentiment Analysis
-   → restaurants_with_atmosphere.csv  (+14 atmosphere scores, dominant_emotion, dining_mood)
+   → restaurants_with_atmosphere.csv  (+14 atmosphere scores, dominant_vibe, dining_mood)
    │
    ▼
 [Gradio Dashboard] — Combines all stages for live querying
@@ -117,7 +117,7 @@ Raw CSV
 ## 📓 Notebook Breakdown
 
 ### Notebook 1 — Data Cleanup & Metadata Enrichment
-- Inspected all 14 columns across 94 restaurant records
+- Inspected all 14 columns across 100 restaurant records
 - Resolved trailing whitespace in `Address` and `Description` columns
 - Corrected a missing comma in Mastro's Ocean Club address
 - Fixed an incorrect zip code for Morihiro (Echo Park location)
@@ -282,7 +282,7 @@ python GradioDashboard.py
 ## 👤 Author
 
 **Papasmurf**
-AI Engineer | NLP & Semantic Search | Los Angeles, CA
+AI Engineer | NLP & Semantic Search | Inglewood, CA
 
 ---
 
