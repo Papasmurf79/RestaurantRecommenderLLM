@@ -27,7 +27,7 @@ load_dotenv()
 
 restaurants = pd.read_csv("../data/restaurants_with_atmosphere.csv")
 
-# Some newly-added restaurants (94-row dataset) predate the cuisine
+# Some newly-added restaurants (100-row dataset) predate the cuisine
 # classification pass and have a null simple_cuisine_group. Fall back
 # to the raw Cuisine Type column so the Cuisine filter never drops them.
 restaurants["simple_cuisine_group"] = restaurants["simple_cuisine_group"].fillna(
